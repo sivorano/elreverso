@@ -25,7 +25,7 @@ def read_data_file(filename):
     S = data['S']
     return I, mask, S
 
-
+# Same
 def display_surface(z):
     """
     Display the computed depth function as a surface using 
@@ -42,10 +42,10 @@ def display_surface(z):
 
 
 
-def PhotometricStereo(imgArr,mask,LightDirections):
+def PhotometricStereoNormals(imgArr,mask,LightDirections):
     """
     imgList is assumed to be a 3d array, with imgArr[x,y,i]
-    shape (len,height,3)
+
     """
 
     l, h = imgArr[:,:,0].shape
@@ -74,11 +74,10 @@ def PhotometricStereo(imgArr,mask,LightDirections):
 
 
 
-#FIXME: Multiply by ½ (*)?
 def CentralDifference(p,q):
     """
     p is horizontal, q is vertiacal
-    see page 7 for deffintion
+    see page 7 for defintion
     """
 
     n,m = p.shape
@@ -92,71 +91,104 @@ def CentralDifference(p,q):
     return (1/2)*(horizontalDiff + verticalDiff)
 
 
-def Amaker(mask):
+def PoissonFDEequations(mask):
     """
     Creates the linear equation system for solving a 2D poisson problem,
     Assumes that the image is square?(*)
+    Assumes that the value on the boundary is 0 for ∇z
+
+    Uses the stencil 
+    0  -1  0
+    -1  4 -1
+    0  -1  0
+
+    For aproximating the laplacian Δz
     """
     
     N = mask.shape[0]
     M = mask.shape[1]
-    
+
+    #Our matrix for the linear equations
     A = lil_matrix((M*N, M*N))
 
     for i in range(0,M*N):
+
+        #We incorparete the stencil into A:
+        
         if mask[np.mod(i,N),int(i/N)] > 0:
+            #We are inside the mask -> inside Ω. As such, the center is multiplied by 4 
             A[i,i] = 4 * mask[np.mod(i,N),int(i/N)]
+                    
+            # The right side value: We multiply with the mask to check if we have hit ∂Ω or beyond.
+            # We multiply by (np.mod(i + 1,N) != 0) to check if we have hit the right side of the
+            # image. In that case, there is no value to the right.
+            # The same idea goes for the other lines
+            if i < M*N - 1:
+                A[i + 1,i] = -1. * mask[np.mod(i+1,N),int((i+1)/N)] * (np.mod(i + 1,N) != 0)
+
+            # Left side
+            if i > 0:
+                A[i - 1,i] = -1. * mask[np.mod(i-1,N),int((i-1)/N)] * (np.mod(i,N) != 0)
+
+            # Above
+            if i + N < M*N:
+                A[i + N,i] = -1. * mask[np.mod(i+N,N),int((i+N)/N)]
+
+                # Bellow
+            if i - N >= 0:
+                A[i - N,i] = -1.  * mask[np.mod(i-N,N),int((i - N )/N)]
+
         else:
-            A[i,i] = 1
-
-        if i < M*N - 1:
-            A[i + 1,i] = -1. * mask[np.mod(i+1,N),int((i+1)/N)] * (np.mod(i + 1,N) != 0)
-
-        if i > 0:
-            A[i - 1,i] = -1. * mask[np.mod(i-1,N),int((i-1)/N)] * (np.mod(i,N) != 0)
-
-        if i + N < M*N:
-            A[i + N,i] = -1. * mask[np.mod(i+N,N),int((i+N)/N)]
-
-        if i - N >= 0:
-            A[i - N,i] = -1.  * mask[np.mod(i-N,N),int((i - N )/N)]
+            #We are outside the mask -> on the boundary or beyond. thus b[i] = 0, so we just
+            #set A[i,i] = 1, so that the value becomes 0, and the system invertible.
+            A[i,i] = 1 
 
 
-    return A
+
+    return csr_matrix(A)
 
 
 #FIXME: der sker mærkelige ting foruden transponering! (*)
-def PoissonSolver2D(normals,mask):
+def PoissonSolverPS(normals,mask):
     """
     Solves the 2D case of the possion problem given unit normals
     """
 
     p = -normals[0]/normals[2]
     q = -normals[1]/normals[2]
+
     
-    #Find ud af hvilken form X har
-    N = p.shape[0]
-    M = p.shape[1]
     b = CentralDifference(p,q).T.ravel()
 
-    A = Amaker(mask)
+    A = PoissonFDEequations(mask)
 
     z = spsolve(A,b)
-    z = -z.reshape((N,M)).T
+    z = -z.reshape(p.shape).T
     return (A,b,z)
 
 
 
+def PhotometricStereoSolver(imgArr,mask,LightDirections,display = False):
+    """
+
+    """
+    normals = PhotometricStereoNormals(imgArr,mask,LightDirections)
+    z = PoissonSolverPS(normals,mask)
+
+    if display:
+        display_surface(z)
+
+    return z
 
 DataPath = "../../Specialprojekt/tilAnders/Beethoven.mat"
 
 Images, mask, S = read_data_file(DataPath)
 
 
-normals = PhotometricStereo(Images,mask,S)
+normals = PhotometricStereoNormals(Images,mask,S)
 
 
-res = PoissonSolver2D(normals,mask)
+res = PoissonSolverPS(normals,mask)
 
 reshaped = res[2]
 
