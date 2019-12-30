@@ -1,5 +1,7 @@
 import numpy as np
 from scipy import ndimage
+from scipy.ndimage import filters
+
 import scipy
 from scipy.sparse import coo_matrix,csr_matrix,bmat,lil_matrix
 import matplotlib.pyplot as plt
@@ -11,6 +13,8 @@ from math import sqrt
 import skimage
 from skimage import color
 from skimage import io
+from os import listdir
+import ps_utils_test
 
 dotest = True
 
@@ -45,10 +49,27 @@ def display_surface(z):
     mlab.show()
 
 
+def imgImporter(path,filename,seperator,threshold = 0.005,lightlim = 4):
 
+    imgs = []
+    S = []
+    for name in listdir(path):
+        # print(name)
+        if str.startswith(name,filename):
+            imgs.append(skimage.color.rgb2gray(skimage.io.imread(path + name)))
+            S.append(eval(str.split(name,seperator)[6]))
+    # plt.imshow(imgs[0])
+    # plt.show()
+    imgs = np.array(imgs)
+    imgs = np.moveaxis(imgs,0,2)
+    S = np.array(S)
 
+    imgMasks = (imgs > threshold).astype(int)
+    imgMask = (np.sum(imgMasks,axis = 2) > lightlim).astype(int)
 
-def PhotometricStereoNormals(imgArr,mask,LightDirections):
+    return (imgs,imgMask,S)
+    
+def PhotometricStereoNormals(imgArr,mask,LightDirections, display = False):
     """
     imgList is assumed to be a 3d array, with imgArr[x,y,i]
 
@@ -62,6 +83,8 @@ def PhotometricStereoNormals(imgArr,mask,LightDirections):
     if len(LightDirections) == 3:
         m  = (np.linalg.inv(LightDirections) @ imgArr[notMasked].T)
     else:
+        
+        
         m =  (np.linalg.pinv(LightDirections) @ imgArr[notMasked].T)
     ρ = np.linalg.norm(m,axis=0)
     
@@ -75,14 +98,25 @@ def PhotometricStereoNormals(imgArr,mask,LightDirections):
     n2[notMasked] = normals[1]
     n3[notMasked] = normals[2]
 
-    
+    if display:
+        _,(ax1,ax2,ax3) = plt.subplots(1,3)
+        ax1.imshow(n1)
+        ax2.imshow(n2)
+        ax3.imshow(n3)
+        plt.show()
+        ρimg = np.zeros((l,h))
+        ρimg[notMasked] = ρ
+        plt.imshow(ρimg)
+        plt.show()
+
     return(n1,n2,n3)
 
-def PhotometricStereoNormals2(imgArr,mask,LightDirections):
+def PhotometricStereoNormals2(imgArr,masks,LightDirections):
     """
     imgList is assumed to be a 3d array, with imgArr[x,y,i]
 
     """
+    mask = masks[0]
 
     l, h = imgArr[:,:,0].shape
 
@@ -130,6 +164,41 @@ def CentralDifference(p,q):
     return (1/2)*(horizontalDiff + verticalDiff)
 
 
+
+def CentralDifferenceX(p,q):
+    """
+    p is horizontal, q is vertiacal
+    see page 7 for defintion
+    """
+
+    n,m = p.shape
+
+    left1 = np.append([0],np.arange(0,n-1))
+    right1 = np.append(np.arange(1,n),[n-1])
+
+    horizontalDiff = p[right1,:] - p[left1,:]
+
+    return (1/2)*(horizontalDiff)
+
+
+
+def CentralDifferenceY(q):
+    """
+    p is horizontal, q is vertiacal
+    see page 7 for defintion
+    """
+
+    n,m = p.shape
+
+    left2 = np.append([0],np.arange(0,m-1))
+    right2 = np.append(np.arange(1,m),[m-1])
+
+    verticalDiff = q[:,right2] - q[:,left2]
+
+    return (1/2)*(verticalDiff)
+
+
+
 def PoissonFDEequations(mask,p,q,b):
     """
     Creates the linear equation system for solving a 2D poisson problem,
@@ -164,19 +233,22 @@ def PoissonFDEequations(mask,p,q,b):
             # The same idea goes for the other lines
             if i < M*N - 1:
                 A[i + 1,i] = -1. * mask[np.mod(i+1,N),int((i+1)/N)] * (np.mod(i + 1,N) != 0)
+                # A[i,i] +=  mask[np.mod(i+1,N),int((i+1)/N)] - 1
 
             # Left side
             if i > 0:
                 A[i - 1,i] = -1. * mask[np.mod(i-1,N),int((i-1)/N)] * (np.mod(i,N) != 0)
-
+                # A[i,i] +=  mask[np.mod(i-1,N),int((i-1)/N)] - 1
+                
             # Above
             if i + N < M*N:
                 A[i + N,i] = -1. * mask[np.mod(i+N,N),int((i+N)/N)]
-
+                # A[i,i] +=  mask[np.mod(i+N,N),int((i+N)/N)] - 1
+                
                 # Bellow
             if i - N >= 0:
                 A[i - N,i] = -1.  * mask[np.mod(i-N,N),int((i - N )/N)]
-
+                # A[i,i] +=  mask[np.mod(i - N,N),int((i - N)/N)] - 1
         else:
             #We are outside the mask -> on the boundary or beyond. thus b[i] = 0, so we just
             #set A[i,i] = 1, so that the value becomes 0, and the system invertible.
@@ -189,7 +261,7 @@ def PoissonFDEequations(mask,p,q,b):
 
 
 
-def PoissonFDEequations2(mask,p,q,b):
+def PoissonFDEequationsOld(mask,p,q,b):
     """
     Creates the linear equation system for solving a 2D poisson problem,
     Assumes that the image is square?(*)
@@ -221,11 +293,6 @@ def PoissonFDEequations2(mask,p,q,b):
 
         #We incorparete the stencil into A:
 
-        if boundary[np.mod(i,N),int(i/N)] > 0:
-            a = (np.mod(i,N),int(i/N))
-            v = up[a] * np.array([1,0]) + down[a] * np.array([-1,0]) + left[a] * np.array([0,-1]) + right[a] * np.array([0,1])
-            v = v/np.linalg.norm(a)
-            ()
 
         cor = (np.mod(i,N),int(i/N))
         if mask[cor] > 0:
@@ -257,18 +324,19 @@ def PoissonFDEequations2(mask,p,q,b):
             
             #FIXME: Also check if near edge
             #FIXME: Korrekt fortegn?
+            fortegn = 1
             if up[cor]:
                 A[i,i-1] += -1
-                b[i] = b[i] - 2*q[cor]
+                b[i] = b[i] + fortegn*2*q[cor]
             if down[cor]:
                 A[i,i+1] += -1
-                b[i] = b[i] + 2*q[cor]
+                b[i] = b[i] - fortegn*2*q[cor]
             if left[cor]:
                 A[i+1,i] += -1
-                b[i] = b[i] - 2*p[cor]
+                b[i] = b[i] + fortegn*2*p[cor]
             if right[cor]:
                 A[i-1,i] += -1
-                b[i] = b[i] + 2*p[cor]
+                b[i] = b[i] - fortegn*2*p[cor]
 
                 
         else:
@@ -278,10 +346,176 @@ def PoissonFDEequations2(mask,p,q,b):
 
 
 
-    return (csr_matrix(A),b)
+    return (csr_matrix(A),nb)
 
 
-#FIXME: der sker mærkelige ting foruden transponering! (*)
+#FIXME: Ingnores von neumann boundary condition
+def PoissonFDEequationsNoVonNeumann(mask,p,q,b):
+    """
+    Creates the linear equation system for solving a 2D poisson problem,
+    Assumes that the image is square?(*)
+    Assumes that the value on the boundary is 0 for ∇z
+
+    Uses the stencil 
+    0  -1  0
+    -1  4 -1
+    0  -1  0
+
+    For aproximating the laplacian Δz
+    """
+    
+    N = mask.shape[0]
+    M = mask.shape[1]
+
+
+
+    
+    
+    #Our matrix for the linear equations
+    hasup = (filters.correlate(mask,[[0,1,0],[0,0,0],[0,0,0]],mode = "constant")*mask)
+    hasdown = (filters.correlate(mask,[[0,0,0],[0,0,0],[0,1,0]],mode = "constant")*mask)
+    hasleft = (filters.correlate(mask,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant")*mask)
+    hasright =  (filters.correlate(mask,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant")*mask)
+
+
+
+    maskList = mask.T.ravel()
+    notMasked = np.nonzero(mask)
+    count = len(notMasked[0])
+    indexConverter = -np.ones(mask.shape,dtype = int)
+    indexConverter[notMasked] = np.arange(0,count)
+
+    upConverter = filters.correlate(indexConverter,[[0,1,0],[0,0,0],[0,0,0]],mode = "constant")*mask
+    downConverter = filters.correlate(indexConverter,[[0,0,0],[0,0,0],[0,1,0]],mode = "constant")*mask
+    leftConverter = filters.correlate(indexConverter,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant")*mask
+    rightConverter = filters.correlate(indexConverter,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant")*mask
+
+    newb = np.zeros(p.shape)
+    newb += -1/2*filters.correlate(p,[[0,1,0],[0,1,0],[0,0,0]],mode = "constant")* hasup
+    newb += 1/2*filters.correlate(p,[[0,0,0],[0,1,0],[0,1,0]],mode = "constant")* hasdown
+    newb += 1/2*filters.correlate(q,[[0,0,0],[0,1,1],[0,0,0]],mode = "constant")* hasright
+    newb += -1/2*filters.correlate(q,[[0,0,0],[1,1,0],[0,0,0]],mode = "constant")* hasleft
+    
+    
+    
+    A = lil_matrix((count, count))
+
+    X,Y = notMasked
+    
+    
+    def checker(hasdir,dirConverter):
+        indexHasDir = hasdir[(X,Y)]
+        wherehasdir = np.nonzero(indexHasDir)[0]
+        indexDir = dirConverter[(X,Y)][wherehasdir]
+        A[(indexDir,wherehasdir)] = A[(indexDir,wherehasdir)].toarray() - 1
+        A[(wherehasdir,wherehasdir)] = A[(wherehasdir,wherehasdir)].toarray() + 1
+
+
+        
+    checker(hasup,upConverter)
+    checker(hasdown,downConverter)
+    checker(hasleft,leftConverter)
+    checker(hasright,rightConverter)
+
+
+
+    nb = newb[mask != 0] #barr #(b)[mask != 0]
+
+    
+    return (csr_matrix(A),nb)
+
+
+def PoissonFDEequationsWithVonNeumann(mask,p,q,b):
+    """
+    Creates the linear equation system for solving a 2D poisson problem,
+    Assumes that the image is square?(*)
+    Assumes that the value on the boundary is 0 for ∇z
+
+    Uses the stencil 
+    0  -1  0
+    -1  4 -1
+    0  -1  0
+
+    For aproximating the laplacian Δz
+    """
+    
+    N = mask.shape[0]
+    M = mask.shape[1]
+
+
+
+    
+    
+    #Our matrix for the linear equations
+    hasup = (filters.correlate(mask,[[0,1,0],[0,0,0],[0,0,0]],mode = "constant")*mask)
+    hasdown = (filters.correlate(mask,[[0,0,0],[0,0,0],[0,1,0]],mode = "constant")*mask)
+    hasleft = (filters.correlate(mask,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant")*mask)
+    hasright =  (filters.correlate(mask,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant")*mask)
+
+
+
+    maskList = mask.T.ravel()
+    notMasked = np.nonzero(mask)
+    count = len(notMasked[0])
+    indexConverter = -np.ones(mask.shape,dtype = int)
+    indexConverter[notMasked] = np.arange(0,count)
+
+
+
+    upConverter = filters.correlate(indexConverter,[[0,1,0],[0,0,0],[0,0,0]],mode = "constant")*mask
+    downConverter = filters.correlate(indexConverter,[[0,0,0],[0,0,0],[0,1,0]],mode = "constant")*mask
+    leftConverter = filters.correlate(indexConverter,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant")*mask
+    rightConverter = filters.correlate(indexConverter,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant")*mask
+
+    newb = np.zeros(p.shape)
+    newb += -1/2*filters.correlate(p,[[0,1,0],[0,1,0],[0,0,0]],mode = "constant") * hasup
+    newb += 1/2*filters.correlate(p,[[0,0,0],[0,1,0],[0,1,0]],mode = "constant") * hasdown
+    newb += 1/2*filters.correlate(q,[[0,0,0],[0,1,1],[0,0,0]],mode = "constant") * hasright
+    newb += -1/2*filters.correlate(q,[[0,0,0],[1,1,0],[0,0,0]],mode = "constant") * hasleft
+    
+    # newb += 2*p*(hasup == 0)*mask
+    # newb += -2*p*(hasdown == 0)*mask
+    # newb += 2*q*(hasright == 0)*mask
+    # newb += -2*q*(hasleft == 0)*mask
+
+    
+    A = lil_matrix((count+1, count+1))
+    A = lil_matrix((count, count))
+
+    # Force the first element to be 0
+    #A[0,count] = 1
+
+    X,Y = notMasked
+
+
+    def checker(hasdir,dirConverter,hasopdir,opositeConverter):
+        indexHasDir = hasdir[(X,Y)]
+        wherehasdir = np.nonzero(indexHasDir)[0]
+        indexDir = dirConverter[(X,Y)][wherehasdir]
+        A[(indexDir,wherehasdir)] = A[(indexDir,wherehasdir)].toarray() - 1
+        A[(wherehasdir,wherehasdir)] = A[(wherehasdir,wherehasdir)].toarray() + 1
+        
+        wherenothasdir = np.nonzero((indexHasDir == 0) * hasopdir[(X,Y)])[0]
+        indexOpDir = opositeConverter[(X,Y)][wherenothasdir]
+        A[(indexOpDir,wherenothasdir)] = A[(indexOpDir,wherenothasdir)].toarray() - 1
+        A[(wherenothasdir,wherenothasdir)] = A[(wherenothasdir,wherenothasdir)].toarray() + 1
+        
+
+
+        
+    checker(hasup,upConverter,hasdown,downConverter)
+    checker(hasdown,downConverter,hasup,upConverter)
+    checker(hasleft,leftConverter,hasright,rightConverter)
+    checker(hasright,rightConverter,hasleft,leftConverter)
+
+
+
+    nb = newb[mask != 0] #barr #(b)[mask != 0]
+    
+    
+    return (csr_matrix(A),nb)
+
+
 def PoissonSolverPS(normals,mask):
     """
     Solves the 2D case of the possion problem given unit normals
@@ -291,94 +525,104 @@ def PoissonSolverPS(normals,mask):
     q = -normals[1]/normals[2]
 
     
-    b = CentralDifference(p,q).T.ravel()
+    b = CentralDifference(p,q)
 
-    A,b = PoissonFDEequations(mask,p,q,b)
+    A,b = PoissonFDEequationsWithVonNeumann(mask,p,q,b)
 
-    z = spsolve(A,b)
-    z = -z.reshape(p.shape).T
-    #z[mask == 0] = np.nan
+    
+    z = np.zeros(mask.shape)
+    vals = spsolve(A,b)
+    #vals = (vals - np.mean(np.abs(vals)))
+    z[np.where(mask > 0)] = vals
+    z[mask == 0] = np.nan
+    z = -z
+
+    
     return (A,b,z)
 
 
 
-def PhotometricStereoSolver(imgArr,mask,LightDirections,display = False):
+def PhotometricStereoSolver(imgArr,mask,LightDirections,display = False,cheat = False):
     """
 
     """
-    normals = PhotometricStereoNormals(imgArr,mask,LightDirections)
-    z = PoissonSolverPS(normals,mask)[2]
-
+    normals = PhotometricStereoNormals(imgArr,mask,LightDirections,display)
+    if cheat:
+        z = ps_utils_test.unbiased_integrate(normals[0],normals[1],normals[2],mask)[0]
+        
+    else:
+        z = PoissonSolverPS(normals,mask)[2]
+        
     if display:
+        
+        p = -normals[0]/normals[2]
+        q = -normals[1]/normals[2]
+
+        cd = CentralDifference(p,q)
+    
+
+
+        _,(ax1,ax2,ax3) = plt.subplots(1,3)
+        ax1.imshow(p)
+        ax2.imshow(q)
+        ax3.imshow(cd)
+        plt.show()
+
+        plt.imshow(z)
+        plt.show()
+
         display_surface(z)
 
     return z
 
 if dotest and True:
-    
-    S = np.array([[0,0,1],
-                  [-1/sqrt(2),0,1/sqrt(2)],
-                  [1/sqrt(2),0,1/sqrt(2)],
-                  [1,0,0],
-                  [-1,0,0]])
 
-    img0 = skimage.color.rgb2gray(skimage.io.imread('./syndata-pic-0.png'))
-    img1 = skimage.color.rgb2gray(skimage.io.imread('./syndata-pic-1.png'))
-    img2 = skimage.color.rgb2gray(skimage.io.imread('./syndata-pic-2.png'))
-    img3 = skimage.color.rgb2gray(skimage.io.imread('./syndata-pic-3.png'))
-    img4 = skimage.color.rgb2gray(skimage.io.imread('./syndata-pic-4.png'))
-
-    imgs = np.moveaxis(np.array([img0,img1,img2,img3,img4]),0,2)
-    
-    # plt.imshow(img1)
-    # plt.show()
-    
-    threshold = 0.005
-    img0Mask = (img0 > threshold).astype(int)
-    img1Mask = (img1 > threshold).astype(int)
-    img2Mask = (img2 > threshold).astype(int)
-    img3Mask = (img3 > threshold).astype(int)
-    img4Mask = (img4 > threshold).astype(int)
-
-    imgMask = ((img0Mask + img1Mask + img2Mask + img3Mask + img4Mask) > 2).astype(int)
-    zimgs = PhotometricStereoSolver(imgs,imgMask,S,display = True)
+    # imgs, imgMask, S = imgImporter("./testbrick/","testbrick","Δ",0.005)
+    # imgs, imgMask, S = imgImporter("./sphere/","testsphere","Δ",0.005,lightlim = 4)
+    # imgs, imgMask, S = imgImporter("./testmonkey/","testmonkey","Δ",0.005,lightlim = 4)
+    # zimgs = PhotometricStereoSolver(imgs,imgMask,S,display = True,cheat = False)
+    # 
     ()
-
-
-if (__name__ == "__main__" or dotest) and False:
+    
+if (__name__ == "__main__" or dotest) and True:
     DataPath = "../../Specialprojekt/tilAnders/Beethoven.mat"
 
     Images, mask, S = read_data_file(DataPath)
-
-
-    normals = PhotometricStereoNormals(Images,mask,S)
-
-
-    res = PoissonSolverPS(normals,mask)
-
-    reshaped = res[2]
-
-
-    p = -normals[0]/normals[2]
-    q = -normals[1]/normals[2]
-
-    cd = CentralDifference(p,q)
-
-
     _,(ax1,ax2,ax3) = plt.subplots(1,3)
-    ax1.imshow(normals[0])
-    ax2.imshow(normals[1])
-    ax3.imshow(normals[2])
+    ax1.imshow(Images[:,:,0],cmap='gray')
+    ax2.imshow(Images[:,:,1],cmap='gray')
+    ax3.imshow(Images[:,:,2],cmap='gray')
     plt.show()
+    z = PhotometricStereoSolver(Images,mask,S,display = True,cheat = False)
 
-    _,(ax1,ax2,ax3) = plt.subplots(1,3)
-    ax1.imshow(p)
-    ax2.imshow(q)
-    ax3.imshow(cd)
-    plt.show()
-    edgefinder = np.array([[0,1,0],[1,0,1],[0,1,0]])
-    plt.imshow(mask - (scipy.ndimage.filters.convolve(mask,edgefinder) == 4))
+    # normals = PhotometricStereoNormals(Images,mask,S)
 
-    plt.imshow(reshaped)
-    plt.show()
-    z = PhotometricStereoSolver(Images,mask,S,display = True)
+
+    # res = PoissonSolverPS(normals,mask)
+
+    # reshaped = res[2]
+
+
+    # p = -normals[0]/normals[2]
+    # q = -normals[1]/normals[2]
+
+    # cd = CentralDifference(p,q)
+
+
+    # _,(ax1,ax2,ax3) = plt.subplots(1,3)
+    # ax1.imshow(normals[0])
+    # ax2.imshow(normals[1])
+    # ax3.imshow(normals[2])
+    # plt.show()
+
+    # _,(ax1,ax2,ax3) = plt.subplots(1,3)
+    # ax1.imshow(p)
+    # ax2.imshow(q)
+    # ax3.imshow(cd)
+    # plt.show()
+    # edgefinder = np.array([[0,1,0],[1,0,1],[0,1,0]])
+    # plt.imshow(mask - (scipy.ndimage.filters.convolve(mask,edgefinder) == 4))
+
+    # plt.imshow(reshaped)
+    # plt.show()
+    # z = PhotometricStereoSolver(Images,mask,S,display = True)
