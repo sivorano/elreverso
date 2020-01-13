@@ -99,15 +99,16 @@ def PhotometricStereoNormals(imgArr,mask,LightDirections, display = False):
     n3[notMasked] = normals[2]
 
     if display:
-        _,(ax1,ax2,ax3) = plt.subplots(1,3)
-        ax1.imshow(n1)
-        ax2.imshow(n2)
-        ax3.imshow(n3)
-        plt.show()
-        ρimg = np.zeros((l,h))
-        ρimg[notMasked] = ρ
-        plt.imshow(ρimg)
-        plt.show()
+        # _,(ax1,ax2,ax3) = plt.subplots(1,3)
+        # ax1.imshow(n1)
+        # ax2.imshow(n2)
+        # ax3.imshow(n3)
+        # plt.show()
+        # ρimg = np.zeros((l,h))
+        # ρimg[notMasked] = ρ
+        # plt.imshow(ρimg)
+        # plt.show()
+        ()
 
     return(n1,n2,n3)
 
@@ -297,7 +298,7 @@ def PoissonFDEequationsOld(mask,p,q,b):
         cor = (np.mod(i,N),int(i/N))
         if mask[cor] > 0:
             #We are inside the mask -> inside Ω. As such, the center is multiplied by 4 
-            A[i,i] = 4 * mask[np.mod(i,N),int(i/N)]
+            A[i,i] = 4
 
             # The right side value: We multiply with the mask to check if we have hit ∂Ω or beyond.
             # We multiply by (np.mod(i + 1,N) != 0) to check if we have hit the right side of the
@@ -305,38 +306,41 @@ def PoissonFDEequationsOld(mask,p,q,b):
             # The same idea goes for the other lines
             if i < M*N - 1:
                 A[i + 1,i] = -1. * mask[np.mod(i+1,N),int((i+1)/N)] * (np.mod(i + 1,N) != 0)
+                # A[i,i] += 1 - mask[np.mod(i+1,N),int((i+1)/N)]
 
             # Left side
             if i > 0:
                 A[i - 1,i] = -1. * mask[np.mod(i-1,N),int((i-1)/N)] * (np.mod(i,N) != 0)
-
+                # A[i,i] += 1 - mask[np.mod(i-1,N),int((i-1)/N)]
+                
             # Above
             if i + N < M*N:
                 A[i + N,i] = -1. * mask[np.mod(i+N,N),int((i+N)/N)]
-
+                # A[i,i] += 1 - mask[np.mod(i+N,N),int((i+N)/N)]
                 # Bellow
             if i - N >= 0:
                 A[i - N,i] = -1.  * mask[np.mod(i-N,N),int((i - N )/N)]
-
-            if up[np.mod(i,N),int(i/N)] == 1:
-                A[i + 1,i] += 1
-                A[i - 1,i]
+                # A[i,i] += 1 - mask[np.mod(i-N,N),int((i - N )/N)]
+                
+            # if up[np.mod(i,N),int(i/N)] == 1:
+            #     A[i + 1,i] += 1
+            #     A[i - 1,i]
             
             #FIXME: Also check if near edge
             #FIXME: Korrekt fortegn?
             fortegn = 1
             if up[cor]:
                 A[i,i-1] += -1
-                b[i] = b[i] + fortegn*2*q[cor]
+                nb[cor] = nb[cor] + fortegn*2*q[cor]
             if down[cor]:
                 A[i,i+1] += -1
-                b[i] = b[i] - fortegn*2*q[cor]
+                nb[cor] = nb[cor] - fortegn*2*q[cor]
             if left[cor]:
                 A[i+1,i] += -1
-                b[i] = b[i] + fortegn*2*p[cor]
+                nb[cor] = nb[cor] + fortegn*2*p[cor]
             if right[cor]:
                 A[i-1,i] += -1
-                b[i] = b[i] - fortegn*2*p[cor]
+                nb[cor] = nb[cor] - fortegn*2*p[cor]
 
                 
         else:
@@ -346,7 +350,7 @@ def PoissonFDEequationsOld(mask,p,q,b):
 
 
 
-    return (csr_matrix(A),nb)
+    return (csr_matrix(A),nb.T.ravel())
 
 
 #FIXME: Ingnores von neumann boundary condition
@@ -452,6 +456,8 @@ def PoissonFDEequationsWithVonNeumann(mask,p,q,b):
     hasleft = (filters.correlate(mask,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant")*mask)
     hasright =  (filters.correlate(mask,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant")*mask)
 
+    totalHas = hasup + hasdown + hasleft + hasright
+    inner = hasup * hasdown * hasleft * hasright
 
 
     maskList = mask.T.ravel()
@@ -467,19 +473,52 @@ def PoissonFDEequationsWithVonNeumann(mask,p,q,b):
     leftConverter = filters.correlate(indexConverter,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant")*mask
     rightConverter = filters.correlate(indexConverter,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant")*mask
 
+
+
+
     newb = np.zeros(p.shape)
-    newb += -1/2*filters.correlate(p,[[0,1,0],[0,1,0],[0,0,0]],mode = "constant") * hasup
-    newb += 1/2*filters.correlate(p,[[0,0,0],[0,1,0],[0,1,0]],mode = "constant") * hasdown
-    newb += 1/2*filters.correlate(q,[[0,0,0],[0,1,1],[0,0,0]],mode = "constant") * hasright
-    newb += -1/2*filters.correlate(q,[[0,0,0],[1,1,0],[0,0,0]],mode = "constant") * hasleft
     
+    newb += -1/2*filters.correlate(q,[[0,1,0],[0,1,0],[0,0,0]],mode = "constant") * hasup
+    newb +=  1/2*filters.correlate(q,[[0,0,0],[0,1,0],[0,1,0]],mode = "constant") * hasdown
+    newb +=  1/2*filters.correlate(p,[[0,0,0],[0,1,1],[0,0,0]],mode = "constant") * hasright
+    newb += -1/2*filters.correlate(p,[[0,0,0],[1,1,0],[0,0,0]],mode = "constant") * hasleft
+
+
+    newb2 = np.zeros(p.shape)
+    
+    # newb2 += -1/2*filters.correlate(p,[[0,1,0],[0,0,0],[0,0,0]],mode = "constant") * hasup
+    # newb2 +=  1/2*filters.correlate(p,[[0,0,0],[0,0,0],[0,1,0]],mode = "constant") * hasdown
+    # newb2 +=  1/2*filters.correlate(q,[[0,0,0],[0,0,1],[0,0,0]],mode = "constant") * hasright
+    # newb2 += -1/2*filters.correlate(q,[[0,0,0],[1,0,0],[0,0,0]],mode = "constant") * hasleft
+    
+    # newb2 += -1/2*filters.correlate(p,[[0,0,0],[0,0,0],[0,-1,0]],mode = "constant") * (hasup==0)
+    # newb2 +=  1/2*filters.correlate(p,[[-1,0,0],[0,0,0],[0,0,0]],mode = "constant") * (hasdown== 0)
+    # newb2 +=  1/2*filters.correlate(q,[[0,0,0],[-1,0,0],[0,0,0]],mode = "constant") * (hasright == 0)
+    # newb2 += -1/2*filters.correlate(q,[[0,0,0],[0,0,-1],[0,0,0]],mode = "constant") * (hasleft == 0)
+
+
+
+    
+    # newb2 += 1/2*filters.correlate(p,[[0,1,0],[0,0,0],[0,-1,0]],mode = "constant") * hasup*hasdown
+    # newb2 += 1/2*filters.correlate(q,[[0,0,0],[1,0,-1],[0,0,0]],mode = "constant") * hasup*hasdown
+
+    # newb2 += filters.correlate(p,[[0,0,0],[0,-1,0],[0,1,0]],mode = "constant") * (hasup == 0)*hasdown
+    # newb2 += -filters.correlate(p,[[0,-1,0],[0,1,0],[0,0,0]],mode = "constant") * (hasdown == 0)*hasup
+    # newb2 += -filters.correlate(q,[[0,0,0],[0,-1,1],[0,0,0]],mode = "constant") * (hasleft == 0)*hasright
+    # newb2 += filters.correlate(q,[[0,0,0],[-1,1,0],[0,0,0]],mode = "constant") * (hasright == 0)*hasleft
+
+    
+    # plt.plot(newb[mask==1])  ;plt.show()
+    # plt.plot(newb2[mask==1])  ;plt.show()
+
+    # newb = CentralDifference(p,q) # newb2
     # newb += 2*p*(hasup == 0)*mask
     # newb += -2*p*(hasdown == 0)*mask
     # newb += 2*q*(hasright == 0)*mask
     # newb += -2*q*(hasleft == 0)*mask
 
     
-    A = lil_matrix((count+1, count+1))
+    # A = lil_matrix((count+1, count+1))
     A = lil_matrix((count, count))
 
     # Force the first element to be 0
@@ -492,15 +531,17 @@ def PoissonFDEequationsWithVonNeumann(mask,p,q,b):
         indexHasDir = hasdir[(X,Y)]
         wherehasdir = np.nonzero(indexHasDir)[0]
         indexDir = dirConverter[(X,Y)][wherehasdir]
-        A[(indexDir,wherehasdir)] = A[(indexDir,wherehasdir)].toarray() - 1
-        A[(wherehasdir,wherehasdir)] = A[(wherehasdir,wherehasdir)].toarray() + 1
+        A[(indexDir,wherehasdir)] = A[(indexDir,wherehasdir)].toarray().flatten() - 1
+        #A[(wherehasdir,wherehasdir)] = A[(wherehasdir,wherehasdir)].toarray() + 1
         
-        wherenothasdir = np.nonzero((indexHasDir == 0) * hasopdir[(X,Y)])[0]
-        indexOpDir = opositeConverter[(X,Y)][wherenothasdir]
-        A[(indexOpDir,wherenothasdir)] = A[(indexOpDir,wherenothasdir)].toarray() - 1
-        A[(wherenothasdir,wherenothasdir)] = A[(wherenothasdir,wherenothasdir)].toarray() + 1
+        # wherenothasdir = np.nonzero((indexHasDir == 0) * hasopdir[(X,Y)])[0]
+        # indexOpDir = opositeConverter[(X,Y)][wherenothasdir]
+        # A[(indexOpDir,wherenothasdir)] = A[(indexOpDir,wherenothasdir)].toarray() - 1
+        # A[(wherenothasdir,wherenothasdir)] = A[(wherenothasdir,wherenothasdir)].toarray() + 1
         
-
+    for i in range(0,count):
+        A[i,i] = totalHas[(X,Y)][i]
+        # print(totalHas[(X,Y)][i])
 
         
     checker(hasup,upConverter,hasdown,downConverter)
@@ -528,12 +569,15 @@ def PoissonSolverPS(normals,mask):
     b = CentralDifference(p,q)
 
     A,b = PoissonFDEequationsWithVonNeumann(mask,p,q,b)
+    # A,b = PoissonFDEequationsOld(mask,p,q,b)
 
+    plt.plot(b) ; plt.show()
     
     z = np.zeros(mask.shape)
     vals = spsolve(A,b)
     #vals = (vals - np.mean(np.abs(vals)))
     z[np.where(mask > 0)] = vals
+    # z = vals.reshape(p.shape).T
     z[mask == 0] = np.nan
     z = -z
 
@@ -548,8 +592,9 @@ def PhotometricStereoSolver(imgArr,mask,LightDirections,display = False,cheat = 
     """
     normals = PhotometricStereoNormals(imgArr,mask,LightDirections,display)
     if cheat:
-        z = ps_utils_test.unbiased_integrate(normals[0],normals[1],normals[2],mask)[0]
-        
+        #z = ps_utils_test.unbiased_integrate(normals[0],normals[1],normals[2],mask)[0]
+        z = ps_utils_test.simchony_integrate(normals[0],normals[1],normals[2],mask)
+        ()
     else:
         z = PoissonSolverPS(normals,mask)[2]
         
@@ -559,14 +604,12 @@ def PhotometricStereoSolver(imgArr,mask,LightDirections,display = False,cheat = 
         q = -normals[1]/normals[2]
 
         cd = CentralDifference(p,q)
-    
 
-
-        _,(ax1,ax2,ax3) = plt.subplots(1,3)
-        ax1.imshow(p)
-        ax2.imshow(q)
-        ax3.imshow(cd)
-        plt.show()
+        # _,(ax1,ax2,ax3) = plt.subplots(1,3)
+        # ax1.imshow(p)
+        # ax2.imshow(q)
+        # ax3.imshow(cd)
+        # plt.show()
 
         plt.imshow(z)
         plt.show()
@@ -588,11 +631,11 @@ if (__name__ == "__main__" or dotest) and True:
     DataPath = "../../Specialprojekt/tilAnders/Beethoven.mat"
 
     Images, mask, S = read_data_file(DataPath)
-    _,(ax1,ax2,ax3) = plt.subplots(1,3)
-    ax1.imshow(Images[:,:,0],cmap='gray')
-    ax2.imshow(Images[:,:,1],cmap='gray')
-    ax3.imshow(Images[:,:,2],cmap='gray')
-    plt.show()
+    # _,(ax1,ax2,ax3) = plt.subplots(1,3)
+    # ax1.imshow(Images[:,:,0],cmap='gray')
+    # ax2.imshow(Images[:,:,1],cmap='gray')
+    # ax3.imshow(Images[:,:,2],cmap='gray')
+    # plt.show()
     z = PhotometricStereoSolver(Images,mask,S,display = True,cheat = False)
 
     # normals = PhotometricStereoNormals(Images,mask,S)
